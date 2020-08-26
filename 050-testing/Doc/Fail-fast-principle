@@ -1,0 +1,56 @@
+
+The Context
+
+Systems should not fail, applications should not crash. That’s what we all want. However, sometimes it fails, and crashes, and we all try hard to prevent that from happening.
+There are a lots of ways we can to prevent softwares from failing:
+
+    Delay the failure.
+
+    Workaround when the failure happens so that software continues to work.
+
+    Fail silently.
+
+Yet, there is a principle in software development that go exactly the opposite ways: Fail-fast.
+What Is Fail-Fast?
+
+Human tends to make mistakes, and software tends to have bugs. The only code that has no bugs is the code that has never been written.
+
+Then what can we do about it?
+
+Preventing something from failing while it’s going to fail doesn’t solve anything. It does not solve the problem, it just hides the problems. And the longer it takes for the problems to appear on the surface, the harder it is to fix and the more it costs.
+
+And in reality, system failures and software crashes are not the worst, and sometimes they’re not bad at all. There is something much worse: deadlocks, crashes long after the original bug, data loss and corruption, and data inconsistency. If a part of the system fails or the application crashes right before those worse things happens, then we’re lucky enough.
+
+That’s why the fail-fast principle encourages us to fail fast and early: If an error occurs, fail immediately and visibily. If something unusually or unexpectedly occurs, let the software fail immediately instead of postponing the failure or working around the failure.
+Why Fail-Fast?
+
+Fail-fast makes bugs and failures appear sooner, thus:
+
+    Bugs are earlier to detect, easier to reproduce and faster to fix.  
+
+    It’s faster to stabilize softwares.
+
+    Fewer bugs and defects will go into production, thus leading to higher-quality and more production-ready software.
+
+    The cost of failures and bugs are reduced.
+
+The longer it takes for a bug to appear on the surface, the longer it takes to fix and the greater it costs.
+
+Image title
+Application of Fail-Fast
+
+Fail-fast is the principle behind many Agile practices:
+
+    Test-driven development: Writing tests to cover all the cases in which it would fail and all the requirements it has to meet, before even implementing it.
+
+    Continuous integration: An Agile practice in software development, where developers are required to integrate their current works into shared repository/branch several times a days. Each integration is verified by an automated builds, thus helping team to find and fix problems early.
+
+Other Examples of Fail-Fast
+
+    When there is missing environment variable or start-up parameters, instead of still starting up the system normally or using fall-back strategy (fall-back to default environments/parameters), the system should fail and stop so that we can be notified and fix the problem right away.
+
+    When a client sends a request with invalid parameters, instead of silently correct the parameters and continue handling the request, the server should let the request fail so that client can be notified and fix the problem as soon as possible.
+
+    Exceptions should never be silently swallowed. Exceptions should only be caught when the catcher know how to handle it; otherwise, let the exception be thrown outside. And let the app crash if no part of the app knows how to handle it (An exception caused by unexpected bugs).
+
+

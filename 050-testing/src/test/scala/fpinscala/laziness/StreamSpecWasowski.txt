@@ -1,0 +1,437 @@
+// wasowski, Advanced Programming, IT University of Copenhagen
+package fpinscala.laziness
+import scala.language.higherKinds
+
+import org.scalatest.{FreeSpec, Matchers}
+import org.scalatest.prop.PropertyChecks
+import org.scalacheck.Gen
+import org.scalacheck.Arbitrary
+import org.scalacheck.Arbitrary.arbitrary
+
+//For ignoring a test use ignore instead of in
+
+// If you comment out all the import lines below, then you test the Scala
+// Standard Library implementation of Streams. Interestingly, the standard
+// library streams are stricter than those from the book, so some laziness tests
+// fail on them.
+
+//Note, that if you comment out all imports, you are testing the standard library's
+//implementation of Streams (which is not what we want to do).
+import stream00._    // uncomment to test the book solution
+//import stream01._ // uncomment to test the broken headOption implementation
+//import stream02._ // uncomment to test another version that breaks headOption
+
+//Question// It does not fail (stream02._)! the only difference is in stream02 cons returns always empty
+//Mikkel:
+//I think the problem is that the two supplied property tests uses the operators == and !=. 
+//Try changing the property tests to:
+//forAll { (n :Int) => cons (n, Stream.empty).headOption shouldBe Some(n) }
+//forAll { (s :Stream[Int]) => s.headOption should !== (None) }
+//Andrzej Wasowski:
+//Thanks Mikkel.  This is exactly the correct answer.  Someone pointed it to me on Thursday, but there was 
+//lots of people who wanted to talk, and I simply forgot.  Now I pushed this fix.
+//The long version:  The story here is that these tests were originally written for scalacheck.  Scalacheck API 
+//is more similar to the one in the book, so it uses normal Boolean predicates.  I quite like that, but I have 
+//learned over time that using both scalacheck and scalatest (which is the usual way of using scalacheck) is 
+//confusing for many.  So once scalatest added PBT  itself, I decided to switch entirely to the scalatest API. 
+//Then the students can read just one set of docs.  It is quite annoying that it is easy to miss mistakes like 
+//the above: if I just use Boolean functions, scalatest will think the tests are passing... I should also look 
+//closer at some other upcoming tests.
+
+class StreamSpecWasowski extends FreeSpec with Matchers with PropertyChecks {
+
+  import Stream._
+
+  
+
+  // A simple converter of lists to streams
+  def list2stream[A] (la :List[A]): Stream[A] =
+    la.foldRight (Stream.empty[A]) (cons[A](_,_))
+
+    // def stream2List[A](s: Stream[A]): List[A] = s match {
+    //   case Cons(h, t) => h() :: toList(t())
+    //   case _ => List()
+    // }
+
+  //Question// What does it mean?
+  // note that there is a name clash between Stream.empty and the testing
+  // library, so we need to qualify Stream.empty
+  //answer: there is a empty function so we we eant our empty we shoul say Stream.empty
+
+  // An example generator of random finite non-empty streams
+  // (we use the built in generator of lists and convert them to streams,
+  // using the above converter)
+  
+  // 'suchThat' filters out the generated instances that do not satisfy the
+  // predicate given in the right argument.
+
+  //Question// does it (la) return List of List of A?  NO it returns one List of A when needed i.e when 
+  //it is called
+
+  //Question// How to generate a Stream[A] with size between 2 to 12? In your generate function
+  //If it was List, we could use :
+  //implicit  val generatorDrivenConfig = PropertyCheckConfiguration(minSize = 0, maxSize = 200)
+  //whenever a List was needed. But since the scalatest doe not have a factory generator for stream, we are 
+  //requared to provide such a generator, then if we want to generate streams with minSize and maxSize we should
+  //do it in the our stream generator. 
+  //I do not know how to generate List[A] with help of listOfN?
+  //what if I wanted the elements be a random number?
+
+  def genNonEmptyStream[A] (implicit arbA :Arbitrary[A]) :Gen[Stream[A]] = 
+  //A in the (implicit arbA :Arbitrary[A]) is List[A]
+    for {
+      la <- arbitrary[List[A]] suchThat { _.nonEmpty }
+    } yield list2stream (la)
+//(arbitrary[List[A]] filter { _.nonEmpty }).map { la => list2stream (la) } //suchThat == filter
+
+
+    // for {
+    //   numElems <- Gen.choose(2, 12)
+    //   elems <- Gen.listOfN(numElems, arbA)   //  Gen.listOfN(4, 7) == List(7, 7, 7, 7)
+    // } yield list2stream (elems)
+
+    // for {
+    //   numElems <- Gen.choose(5, 12)
+    //   elems <- Gen.listOfN(numElems, elemGenerator)   //  Gen.listOfN(4, 7) == List(7, 7, 7, 7)
+    // } yield elems
+
+  
+  "headOption" - {
+
+    // a scenario test:
+    
+    "returns None on an empty Stream (01)" in {
+      (Stream.empty.headOption) shouldBe (None)
+    }
+
+
+    // two property tests:
+
+    "returns the head of a singleton stream packaged in Some (02)" in {
+      //forAll { (n :Int) => cons (n, Stream.empty).headOption == Some (n) } //It does not work. Look at line 24
+      forAll { (n :Int) => cons (n, Stream.empty).headOption shouldBe Some(n) }
+    }
+
+    //val test = Arbitrary[Stream[Int]] (a:Int => a*5)
+
+
+    "returns the head of random stream packaged in Some (02)" in {
+      // The implicit makes the generator available in the context
+      //Question//
+      //https://www.scalacheck.org/files/scalacheck_2.11-1.13.1-api/index.html#org.scalacheck.Arbitrary$
+
+      //implicit val arbIntStream = Arbitrary[Stream[Int]] (genNonEmptyStream[Int])
+      //implicit val arbIntStream = Arbitrary[Int] (5)
+
+      implicit def arbIntStream = Arbitrary[Stream[Int]] (genNonEmptyStream[Int])
+
+
+      // This property uses our generator of non empty streams thanks to the above implicit declaration
+      //forAll { (s :Stream[Int]) => s.headOption != None }// It does not work. Look at line 24
+      forAll { (s :Stream[Int]) => s.headOption should !== (None) }
+    }
+
+      // a scenario test:
+    "should not force the tail of the stream" in{
+      //Cons( ()=> 0, () => {throw new Exception("Stream value was forced"); Empty}).headOption shouldBe Some(0)
+      Cons( ()=> 0, () => {throw new Exception("It forced the tail of the Stream"); Empty}).headOption
+      //cons( 0, {throw new Exception("Stream value was forced"); Stream.empty}).headOption
+
+      //Question// How can I check if a statement returns an exception?  not usefull here
+      //Answer:
+      // intercept[Exception]{
+      // cons({throw new Exception("Stream value was forced")} , Stream.empty).headOption  }
+      // fail("I've got a bad feeling about this") // Error message: I've got a bad feeling about this
+      //cons( 2, cons( fail("It occurs in the second element of stream!"), Stream.empty)).headOption shouldBe Some(2)
+      //cons( 2, cons( fail("It occurs in the second element of stream!"), Stream.empty)).headOption
+      //cons( fail("It occurs in the first element of stream!"), cons( 2 , Stream.empty)).headOption
+
+      
+
+
+    }
+
+    "should not force the tail of the stream 2" in{
+//shouldBe is not needed here since it will fail during the property evaluation. So it does not rich to shoulBe
+
+     forAll ("n") { (n :Int) => 
+     cons(n, cons( n * 2 , cons( 7, {throw new Exception("It forced the tail of the stream") }))).headOption //shouldBe Some(n)
+     }
+    }
+
+    //cons(n, cons( n*2, cons({throw new Exception("Stream value was forced")}, cons( n*4, Empty)))).headOption  }  
+    
+
+  }
+
+  ////////////////////////////////////////////////////////////////////////
+  
+  "take" - {
+
+    "take should not force any heads nor any tails of the Stream it manipulates" in {
+      //from is a lazy function so the two following test are useless
+      //Stream.from(2).take(6).toList shouldBe Stream(2,3,4,5,6,7).toList 
+      //Stream.from(2).take(0).toList shouldBe Stream().toList
+
+
+      implicit def arbIntStream = Arbitrary[Stream[Boolean]] (genNonEmptyStream[Boolean])
+      forAll ("stream", "n"){
+        (s: Stream[Boolean], n: Int) =>
+          s.map(a => { fail("It forced the head or the tail of the Stream"); a}).take(n) //toList force it
+          //s.map(a => { throw new Exception("Stream value was forced"); a}).take(n)  
+      }
+
+    }
+
+
+    "take(n) does not force (n+1)st head ever (even if we force all elements of take(n))" in {
+    //   val tiredHead = () => {throw new Exception("Stream value was forced"); 1} // does not want to be evaluated
+    //   cons(tiredHead(), Empty).take(0)
+    //   cons(1, cons(tiredHead(), Empty)).take(1)
+    // }
+    
+    // val tiredHead = () => {throw new Exception("Stream value was forced"); 1} // does not want to be evaluated
+    // Cons(tiredHead, () => Empty).take(0).toList
+    // Cons(() => 1, () => Cons(tiredHead, () => Empty)).take(1).toList
+
+    val tiredHead = () => {throw new Exception("It forced (n+1) element"); 1} // does not want to be evaluated
+    //toList is an idempotent function. What is a term for a function that when called repeatedly, has the same
+    //effect as calling once? This type of function / operation is called Idempotent
+    cons(tiredHead(), Empty).take(0).toList
+    cons(1, cons(tiredHead(), Empty)).take(1).toList
+    }
+
+    //Questio//n Is there any way to desply the passed Stream?  for other type it desplies like: List Int ...
+    //I know we can typecast it to List, but in this way I force it.
+    //What I want is that it typecast stream to list automatically whenever the test fails
+    //Occurred when passed generated values (
+    //stream = Cons(fpinscala.laziness.stream00.Stream$$$Lambda$13492/2125697672@43c0c1ab,fpinscala.laziness.
+    //stream00.Stream$$$Lambda$13493/1645007150@4e6a587d),       n = 1 // 30 shrinks)
+    //Just use toList 
+
+    "s.take(n).take(n) == s.take(n) for any Stream s and any n (idempotency)" in {
+      implicit def arbIntStream = Arbitrary[Stream[String]] (genNonEmptyStream[String])
+      forAll ("stream", "n"){
+        (s: Stream[String], n: Int) =>
+        //assert(s.take(n).take(n).toList == s.take(n).toList)
+        s.take(n).take(n).toList shouldEqual s.take(n).toList
+
+        //Question// Why the following statement fail? But assert(s.take(n).take(n) == s.take(n)) in reple pass!
+        //Without forcing it
+        //answer: Since scala Stream head is not lazy but our stream has lazy head. 
+        //Then in REPLE when you try: assert(s.take(n).take(n) == s.take(n))
+        //It works fine even thogh take is lazy. Since head is not lazy the it will be evaluated
+        //On the other hand it does not evalute in our stream, therefore it fails
+        
+        //s.take(n).take(n) shouldEqual s.take(n)
+       // assert(s.take(n).take(n) == s.take(n))
+      }
+    }
+
+
+  }
+
+
+//Question// How can I specify the length of List?  Gen.listOfN(numElems, elemGenerator)
+//Answer
+// for {
+    //   numElems <- Gen.choose(5, 12)
+    //   elems <- Gen.listOfN(numElems, elemGenerator)   //  Gen.listOfN(4, 7) == List(7, 7, 7, 7)
+    // } yield elems
+
+
+  "drop" - {
+
+    "s.drop(n).drop(m) == s.drop(n+m) for any n, m (additivity)" in{
+
+      
+//Question// Does scalatest or scalacheck have factory Stream generator? No. That is the reason you implement 
+//genNonEmptyStrem
+//If I do not provide implicit def arbIntStream, compiler throws an error:
+//could not find implicit value for parameter arbA: 
+//org.scalacheck.Arbitrary[fpinscala.laziness.stream00.Stream[Int]]
+
+
+//Question// What is the range of the length of s? By defualt . How it is choosen!
+//answer by defualt: minSize = 0 and maxize = 100
+//http://www.scalatest.org/user_guide/generator_driven_property_checks
+
+//NB It applies iff s is List since scala does not have a stream generator! If you want specify a minSize 
+//and maxSize for stream, you should do it in your stream generator (def genNonEmptyStream[A])
+//For List:
+//implicit override val generatorDrivenConfig = PropertyCheckConfig(minSize = 0, maxSize = 200)
+//class PropertyCheckConfig in trait Configuration is deprecated: Use PropertyCheckConfiguration instead
+//[warn]     implicit  val generatorDrivenConfig = PropertyCheckConfig(minSize = 0, maxSize = 200)
+
+ // for {
+    //   numElems <- Gen.choose(5, 12)
+    //   n <- Gen.choose(5, 500)
+    //   m <- Gen.choose(5, 500)
+    //   elems <- Gen.listOfN(numElems, elemGenerator)   //  Gen.listOfN(4, 7) == List(7, 7, 7, 7)
+    // } yield elems
+
+
+//But when I replace it with PropertyCheckConfiguration, other erorr shows up:
+//unknown parameter name: maxSize
+//[error] implicit  val generatorDrivenConfig = PropertyCheckConfiguration(minSize = 0, maxSize = 200)
+//[error]                                                                                       ^
+
+//If I remove maxSize = 200. It works fine!
+//implicit  val generatorDrivenConfig = PropertyCheckConfiguration(minSize = 0, maxSize = 20)
+//implicit  val generatorDrivenConfig = PropertyCheckConfiguration(minSize = 0)
+
+//http://www.scalatest.org/user_guide/generator_driven_property_checks
+
+    implicit def arbIntStream = Arbitrary[Stream[Int]] (genNonEmptyStream[Int])
+    implicit def arbPositiveInt = Arbitrary[Int](Gen.choose(1, 20000))
+    // arbIntStream vil be used whenever a Stream[Int] is needed e.g in forAll (s) 
+    // arbPositiveInt vil be used whenever a Int is needed e.g in forAll (n,m)
+
+
+      //(minSuccessful(5000))
+      //Gen.choose (0,10000) -> "m"
+     //Question// How to specify a range for n and a diffrent range for m? Use whenever
+
+
+     //Question// How to set misSize and maxSise? you should set them in your stream generator since  scala does
+     //not have a stream generator. then you can not specify misSize and maxSise here with
+     //implicit  val generatorDrivenConfig = PropertyCheckConfiguration(minSize = 0, maxSize = 20)
+     //
+     //Question// How to specify minSuccessful and maxDiscarded along with "stream", "n", "m"?
+     //answer: forAll ("n", "d", minSuccessful(500), maxDiscarded(300)) {...}
+      forAll ("stream", "n", "m", minSuccessful(5000))   {
+        (s: Stream[Int], n: Int, m:Int ) =>
+        
+      
+        //Question// what is the magic! how it choose the size of stream such that it is not greater than n + m!
+        //No magic is involved. LOL
+        //Consider Stream(1,2,3,4,5) what if n = 4, m 4. m+n = 8. Ok, What is wrong! Nothing. It simply returns
+        //Stream() like so:
+        //Stream().drop(5)
+        //res10: scala.collection.immutable.Stream[Nothing] = Stream()
+        //Olso:
+        //Stream().drop(5).drop(2)
+        //res11: scala.collection.immutable.Stream[Nothing] = Stream()
+        //But hold on. How we can choose n and m such that n+m != s.length. Since we will not have too many
+        //shuch n and m.
+
+        //Int.MaxValue = 2147483647
+        //Int.MinValue = -2147483648
+        // 2147483647 / 2 = -1073741823.5
+        // (2147483647 - 1) / 2 = 1073741823
+
+        //Question// Why when I only check  if (n >= Int.MaxValue / 2 || m >= Int.MaxValue / 2)  (n-1) / 2 
+        //but not n<0 or m<0. It passes the test! Even with the negative n and m!
+        //answer: It does not pass. maybe you test it without saving! How know
+
+        //if (n < 0)  -n   //println("n" +  n) //you do not need to take care about MinValue since in next line you do
+        //else if (m < 0) -m //{println("m" +  m); m}
+        //else if (n >= Int.MaxValue / 2 || m >= Int.MaxValue / 2)  (n-1) / 2
+        // If n in drop(n) is greater than the size of the stream it returns emptym like so:
+        // Stream(1,2,3).drop(4)
+        //res4: scala.collection.immutable.Stream[Int] = Stream()
+        //For the reason that  we divide it by 2.
+        //It must be || not &&. In case of && assume: 
+        //maxint = 10, n=4, m=7 then n + m = 11 which is greater than 10. n-1 becuase n could be an even number  
+        //val s = Stream(from(1))
+        //N.B instead of checking all condition above, you could simply generate positive integer like so:
+        //implicit def arbPositiveInt = Arbitrary[Int](Gen.choose(1, 20000))
+    
+        s.drop(n).drop(m).toList shouldEqual s.drop(n+m).toList 
+        //else assert(s.drop(n).drop(m).toList == s.drop(n+m).toList) //Also works fine
+      }
+
+    }
+
+
+    "s.drop(n) does not force any of the dropped elements heads" in {
+      //test for head and tail
+      implicit def arbIntStream = Arbitrary[Stream[Float]] (genNonEmptyStream[Float])
+      forAll ("stream", "n"){
+        (s: Stream[Float], n: Int) =>
+          //s.map(a => { fail("It forces the heads or the tails of the Stream"); a}).drop(n)
+          s.map(a => { throw new Exception("It forced the head of the stream"); a}).drop(n)  
+      
+          // test only for head but for one stream
+      //val tiredHead = () => {throw new Exception("Stream value was forced"); 1} // does not want to be evaluated
+      //Cons(tiredHead, () => Cons(() => 1, () => Empty)).drop(1)       
+
+      }
+    }
+
+
+    "the above should hold even if we force some stuff in the tail" in {
+      val tiredHead = () => {throw new Exception("It forced the head of the stream when forcing the tail"); 1} // does not want to be evaluated
+      Cons(tiredHead, () => Cons(() => 1, () => Empty)).drop(1).toList //It fails with drop(0).toList but pass 
+      //even with drop(10).toList
+    }
+
+
+
+
+  }
+
+
+
+
+  "map" - {
+
+    "x.map(id) == x (where id is the identity function)" in{
+      implicit def arbIntStream = Arbitrary[Stream[Double]] (genNonEmptyStream[Double])
+      //Question// Could we show a test when it fails?
+      //You get! scalatest takes care of it
+      forAll  ("stream")    {
+        (s: Stream[Double]) =>
+        s.map(a => a).toList shouldEqual s.toList
+      }
+    }
+
+
+    "map terminates on infinite streams" in {
+      from(0).map(a => a+10)
+    }
+
+
+
+
+  }
+
+
+
+
+ "append" - {
+  "Stream(1, 2).append(Stream(3, 4)) == Stream(1, 2, 3, 4)" in {
+    //Stream(1, 2).append(Stream(3, 4)).toList shouldEqual Stream(1, 2, 3, 4).toList
+    implicit def arbIntStream = Arbitrary[Stream[Char]] (genNonEmptyStream[Char])
+    forAll {
+      (s: Stream[Char]) => 
+      s.append(Stream(12)).toList shouldEqual s.toList ++ Stream(12).toList
+    }
+  }
+
+
+  "Stream(1, 2).append(Empty) == Stream(1, 2) && Empty.append(Stream(1, 2)) == Stream(1, 2)" in {
+    //Stream(1,2).append(Empty).toList shouldEqual Stream(1,2).toList
+    //Empty.append(Stream(1,2)).toList shouldEqual Stream(1,2).toList
+
+    assert( Stream(1,2).append(Empty).toList == Stream(1,2).toList &&
+    Empty.append(Stream(1,2)).toList == Stream(1,2).toList )
+    
+  }
+
+  "It nither force the heads nor tails of the streams" in {
+    forAll ("n") { (n: Int) =>
+    from(n).append (from(n)) //(useless, but should not crash)
+    }
+  }
+
+
+
+ }
+
+
+
+
+
+
+}

@@ -1,0 +1,453 @@
+//khoda ba tozih
+// Advanced Programming. Andrzej Wasowski. IT University
+// To execute this example, run "sbt run" or "sbt test" in the root dir of the project
+// Spark needs not to be installed (sbt takes care of it)
+
+import org.apache.spark.ml.feature.Tokenizer
+import org.apache.spark.sql.Dataset
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.types._
+//import scala.collection.mutable._
+
+
+
+// This
+// (https://stackoverflow.com/questions/40015416/spark-unable-to-load-native-hadoop-library-for-your-platform)
+// actually does seems to work, to eliminate the missing hadoop message.
+// 'WARN NativeCodeLoader: Unable to load native-hadoop library for your platform... using builtin-java classes where applicable'
+// AW not sure if the 'hadoop missing warning' matters though.
+
+object Main {
+
+	type Embedding = (String, List[Double])
+	type ParsedReview = (Integer, String, Double)
+
+	org.apache.log4j.Logger getLogger "org"  setLevel (org.apache.log4j.Level.WARN)
+	org.apache.log4j.Logger getLogger "akka" setLevel (org.apache.log4j.Level.WARN)
+	val spark =  SparkSession.builder
+		.appName ("Sentiment")
+		.master  ("local[5]")
+		.getOrCreate
+
+	spark.conf.set("spark.executor.memory", "4g")
+
+  import spark.implicits._
+
+	val reviewSchema = StructType(Array(
+			StructField ("reviewText", StringType, nullable=false),
+			StructField ("overall",    DoubleType, nullable=false),
+			StructField ("summary",    StringType, nullable=false)))
+
+
+  //{"reviewerID": "A2IBPI20UZIR0U",
+  //"asin": "1384719342",
+  //"reviewerName": "cassandra tu \"Yeah, well, 
+  //that's just like, u...", 
+  //"helpful": [0, 0], 
+  //"reviewText": "Not much to write about here, but it does exactly what it's supposed to. filters out
+  //the pop sounds. now my recordings are much more crisp. it is one of the lowest prices pop filters on 
+  //amazon so might as well buy it, they honestly work the same despite their pricing,", 
+  //"overall": 5.0, 
+  //"summary": "good", 
+  //"unixReviewTime": 1393545600, 
+  //"reviewTime": "02 28, 2014"}
+
+  //val reviewSchema = StructType(Array(
+	//StructField ("reviewText", StringType, nullable=false),      0 
+	//StructField ("overall",    DoubleType, nullable=false),      1
+	//StructField ("summary",    StringType, nullable=false)))     2
+
+  //(id.toInt, s"${row getString 2} ${row getString 0}", row getDouble 1)
+  // UniqueId,       summary    +         reviewText   ,     overall
+
+
+  //  val path = "/media/neutron/D/3Semester/AP/Repository/Todo/070-sentiment/data/Musical_Instruments_5.json"
+  //  val sch = spark.read.json(path)
+  //  val schrdd = spark.read.json(path).rdd
+  //  sch.printSchema
+  //  schrdd.take(4).foreach(println)
+
+
+  // Read file and merge the text and summary into a single text column
+	def loadReviews (path: String): Dataset[ParsedReview] =
+		spark
+			.read
+			.schema (reviewSchema)
+			.json (path)
+			.rdd
+			.zipWithUniqueId
+			.map[(Integer,String,Double)] { case (row,id) =>
+          (id.toInt, s"${row getString 2} ${row getString 0}", row getDouble 1) } 
+			.toDS
+			.withColumnRenamed ("_1", "id" ) //  UniqueId
+			.withColumnRenamed ("_2", "text") //summary    +       reviewText
+			.withColumnRenamed ("_3", "overall") //overall
+			.as[ParsedReview]
+
+  //  val pathtxt = "/media/neutron/D/3Semester/AP/Repository/Todo/070-sentiment/data/test.txt"
+  //  val txt = spark.read.text(pathtxt)
+  //  val txtmap = spark.read.text(pathtxt).map  { _ getString 0 split (Array(';', ',', ':', 'r'))  }
+  //Question How to split a string, but also keep the delimiters? If you have several delimiters
+  //Question what if the delimiter is a question mark?
+
+  //https://stackoverflow.com/questions/2206378/how-to-split-a-string-but-also-keep-the-delimiters
+
+  //Question what is the type of txtmap?
+  //  val txtmap = spark.read.text(pathtxt).map{ _ getString 0 split ("((?<=k)|(?=k))") }
+  //  txt.show
+  //  txtmap.show
+  //System.out.println(Arrays.toString("a;b;c;d".split("(?<=;)")));
+  //System.out.println(Arrays.toString("a;b;c;d".split("(?=;)")));
+  //System.out.println(Arrays.toString("a;b;c;d".split("((?<=;)|(?=;))")));
+  
+ //Question//text read a txt file line by line and returs a Array. But for glove.6B.50d.txt it does not read line by line!
+ //the 0.418 0.24968 -0.41242 0.1217 0.34527 -0.044457 -0.49688 -0.17862 -0.00066023 -0.6566 0.27843 -0.14767 
+ //-0.55677 0.14658 -0.0095095 0.011658 0.10204 -0.12792 -0.8443 -0.12181 -0.016801 -0.33279 -0.1552 -0.23131 
+ //-0.19181 -1.8823 -0.76746 0.099051 -0.42125 -0.19526 4.0071 -0.18594 -0.52287 -0.31681 0.00059213 0.0074449 
+ //0.17778 -0.15897 0.012041 -0.054223 -0.29871 -0.15749 -0.34758 -0.045637 -0.44251 0.18785 0.0027849 -0.18411 
+ //-0.11514 -0.78581
+ // next 54654654
+ //answer: It does (line by line) 
+ //A line can contains (long) billions of word or character or digits (object). basically whenever you 
+ //hit the enter button it will consider as //next line (different line)
+
+  // Load the GLoVe embeddings file
+  def loadGlove (path: String): Dataset[Embedding] =
+		spark
+			.read
+			.text (path)
+      .map  { _ getString 0 split " " }
+      .map  (r => (r.head, r.tail.toList.map (_.toDouble))) // yuck!
+			.withColumnRenamed ("_1", "word" )
+			.withColumnRenamed ("_2", "vec")
+			.as[Embedding]
+
+  def main(args: Array[String]) = {
+
+    val DATA_PATH = "/media/neutron/D/3Semester/AP/Repository/Todo/070-sentiment/data"
+
+    val glove: Dataset[Embedding] = loadGlove (s"${DATA_PATH}/glove.6B.50d.txt")
+    val reviews: Dataset[ParsedReview] = loadReviews (s"${DATA_PATH}/Musical_Instruments_5.json")
+
+    // replace the following with the project code
+    println("---------------glove------------------" )
+    glove.show
+    println("---------------reviews------------------" )
+    reviews.show
+
+    // Train the sentiment perceptron here (this is *one* possible workflow, and it is slow ...)
+    //
+    //---------- First clean the data
+    //      - Use the tokenizer to turn records with reviews into records with
+    //      lists of words
+		//         documentation: https://spark.apache.org/docs/latest/ml-features.html#tokenizer
+    //type Tok = (Integer, Seq[String], Double)
+
+
+      // def text2word(reviews: DataFrame ): Tok = {
+      // reviews.map(r => r)
+      // }
+
+    println("---------------tokenized------------------" )
+        
+    import org.apache.spark.sql.{ DataFrame, Row, SQLContext }
+  
+    val tokenizer = new Tokenizer().setInputCol("text").setOutputCol("words")
+    val tokenized : DataFrame = tokenizer.transform(reviews)  //.withColumnRenamed("words","fff")
+    //val countTokens = udf { (words: Seq[String]) => words.length }
+    tokenized.show
+        
+    //type DataFrame = Dataset[Row]
+
+  //val select: DataFrame = tokenized.select("words")
+  //val selectWithMap = tokenized.map(a => a.getAs[String](1))//.withColumnRenamed ("_0", "test" ).as[String]
+  //selectWithMap.show
+
+
+    
+    
+    //tokenized.show
+    //case (row,id) =>
+    //(id.toInt, s"${row getString 2} ${row getString 0}", row getDouble 1) }
+
+    //val result: Nothing = new Tokenizer().setInputCol("text").setOutputCol("words")
+    //val res: Nothing = tokenizer.transform(reviews)
+
+
+
+    //------------ Second translate the reviews to embeddings
+    //      - Flatten the list to contain single words
+    //         output type: a collection (Integer, String, Double) but much
+    //         longer than input
+    println("---------------transREv------------------" )
+    //Hardcode
+    /*val transREv: Dataset[(Integer, String, Double)] = tokenized
+    .flatMap(a => a.getAs[scala.collection.mutable.WrappedArray[String]]("words").map
+    (word => Tuple3[Integer, String, Double](a.getAs("id"), word, a.getAs("overall"))))
+      .withColumnRenamed("_1", "id")
+      .withColumnRenamed("_2", "word")
+      .withColumnRenamed("_3", "overall").as[(Integer, String, Double)]*/
+
+    
+    //("words") == (3)
+    //as convert dataframe to dataset
+    //transREv.show
+  import scala.collection.mutable.WrappedArray
+  //type Isd = (Int, String, Double)
+	//type ParsedReview = (Integer, String, Double)
+  
+  //Compliant solution kinda
+  def reviewsToEmbeddings(transformTokenized: DataFrame ): Dataset[(Integer, String, Double)] = {
+    transformTokenized.flatMap(a => a.getAs[WrappedArray[String]]("words").map
+    (word => Tuple3[Integer, String, Double](a.getAs("id"), word, a.getAs("overall"))))
+      .withColumnRenamed("_1", "id")
+      .withColumnRenamed("_2", "word")
+      .withColumnRenamed("_3", "overall")
+      .as[(Integer, String, Double)]
+  }
+
+
+   val singleWords = reviewsToEmbeddings(tokenized)
+   singleWords.show
+    //Question my output type is (String, Integer, Double,Array[Double])
+    //------------ Join the glove vectors with the triples
+    //         output type: a collection (Integer, String, Double,
+    //         Array[Double])
+    //https://jaceklaskowski.gitbooks.io/mastering-spark-sql/spark-sql-joins.html
+
+    // val left = Seq((0, "zero", 0.0), (1, "one", 1.0), (10, "ten", 10.0), (7, "seven", 7.0)).toDF("id", "left", "ld")
+    // val right = Seq((0, "zero", 0.0), (2, "two", 2.0), (1, "three", 1.0)).toDF("id", "right", "rd")
+    // left.join(right, "id").show
+    println("---------------joinedGlove------------------")
+            val joinedGlove: Dataset[(String, Integer, Double, Array[Double])] = singleWords.join(glove,"word")
+            .withColumnRenamed("_1", "word")
+            .withColumnRenamed("_2", "id")
+            .withColumnRenamed("_3", "overall")
+            .withColumnRenamed("_4", "vec")
+            .as[(String, Integer, Double,Array[Double])]
+
+
+    joinedGlove.show
+
+
+
+    //---------- Drop the word column, we don't need it anymore
+    //         output type: a collection (Integer, Double, Array[Double])
+
+          //val joineddrop: Dataset[(Integer, Double, Array[Double])] = joined.drop(joined.col("word")).as[(Integer, Double,Array[Double])]
+          //getAs is a member of Dataframe only
+    println("---------------dropColumnWord------------------" )
+
+        //  val joinedDF = joinedGlove.toDF
+         val dropColumnWord: DataFrame =  
+         joinedGlove.toDF.map(row => Tuple3[Integer, Double, WrappedArray[Double]] 
+           (row.getAs("id"), row.getAs("overall"), row.getAs("vec") ))
+         .withColumnRenamed("_1", "id")
+         .withColumnRenamed("_2", "overall")
+         .withColumnRenamed("_3", "vec")
+            
+         dropColumnWord.show
+
+    //--------- Add a column of 1s
+    //         output type: a collection (Integer, Double, Array[Double], Integer)
+          // import org.apache.spark.sql.functions
+          // val addcol1s = joineddrop.withColumn("new_col",functions.lit(1))
+          // addcol1s.show
+    println("---------------addColumn1s------------------" )
+
+           val addColumn1s: DataFrame = dropColumnWord.map(row => Tuple4[Integer, Double, WrappedArray[Double], Integer] 
+           (row.getAs("id"), row.getAs("overall"), row.getAs("vec"), 1))
+           .withColumnRenamed("_1", "id")
+           .withColumnRenamed("_2", "overall")
+           .withColumnRenamed("_3", "vec")
+           .withColumnRenamed("_4", "1s")
+
+           addColumn1s.show
+
+
+    //----------- Reduce By Key (using the first or two first columns as Key), summing the last column
+    //         output type: a collection (Integer, Double, Array[Double], Integer)
+    //         (just much shorter this time)
+          // val test3 = addcol1s.map(row => Tuple2[Integer, Integer] 
+          //  (row.getAs("id"), row.getAs("1s")))
+          //  .withColumnRenamed("_1", "id")
+          //  .withColumnRenamed("_2", "1s")
+           //.as[(Integer, Integer)]
+
+    println("----------------reduceWithKey-----------------" )
+
+
+    def sumTheVectors(first: WrappedArray[Double], secound: WrappedArray[Double]): WrappedArray[Double] = {
+      first.zip(secound).map { case (x, y) => x + y }
+    }
+
+    def eachRowDivideVectorByCount(vec: WrappedArray[Double], count:Integer) : WrappedArray[Double] = {
+      vec.map(_ / count)
+    }
+
+    // Here zipped is a method that's available on pairs of collections that has a special map that takes a 
+    // Function2, which means the only tuple that gets created is the (a, b) pair. The extra efficiency probably 
+    // doesn't matter much in most cases, but the fact that you can pass a Function2 instead of a function from 
+    // pairs means the syntax is often a little nicer as well.
+
+        //Hard code
+  import org.apache.spark.rdd._
+  val reduceWithKey: Dataset[(Integer, Double, Array[Double])] = addColumn1s.rdd.map( row => (row.getAs("id"):Integer, 
+    (row.getAs("1s"):Integer, row.getAs[WrappedArray[Double]]("vec"), row.getAs[Double]("overall"))))
+      .reduceByKey( (x, y) => (x._1 + y._1, sumTheVectors(x._2, y._2) , x._3) ) //(x._2, y._2).zipped.map(_ + _)
+      /*------In each row divide the Array (vector) by the count (the last column)
+      output type: a collection (Integer, Double, Array[Double])
+      This is the input for the classifier training */  
+      .map(row => (row._1, row._2._3 , eachRowDivideVectorByCount(row._2._2, row._2._1))) //row._2._2 map (_ / row._2._1)
+      .toDS
+      .withColumnRenamed("_1", "id")
+      .withColumnRenamed("_2", "overall")
+      .withColumnRenamed("_3", "vec")
+      .as[(Integer, Double, Array[Double])]
+          
+      reduceWithKey.show
+      //reduceWithKey.take(2).foreach(println)
+
+
+
+    //  - Train the perceptron:
+    //      - translated the ratings from 1..5 to 1..3 (use map)
+    //      - make sure tha columns are named "id", "label", "features"
+    //import org.apache.spark.mllib.linalg.{Vector, Vectors} It does not work for the hell of it LOL
+    import org.apache.spark.ml.linalg.{Vector, Vectors}
+        println("--------------properDtaForMLPC----------------")
+    val properDtaForMLPC: Dataset[(Integer, Double, Vector)] = 
+    reduceWithKey.map(row => (row._1 , if (row._2 < 3) 0 else if (row._2 == 5) 2 else 1 , Vectors.dense(row._3) )               )
+    .withColumnRenamed("_1", "id")
+    .withColumnRenamed("_2", "label")
+    .withColumnRenamed("_3", "features")
+    .as[(Integer, Double, Vector)]
+
+    properDtaForMLPC.show
+
+   
+    //      - follow the MultilayerPerceptronClassifier tutorial.
+    //      - Remember that the first layer needs to be #50 (for vectors of size
+    //      50), and the last needs to be #3.
+    //Question are we measuring validation with two different methods? (Holdout and cross-validation(10 fold)).
+    // Split the data into train and test
+val splits = properDtaForMLPC.randomSplit(Array(0.6, 0.4), seed = 1234L)
+val train = splits(0)
+val test = splits(1) 
+
+// specify layers for the neural network:
+// input layer of size 50 (features), two intermediate of size 5 and 4
+// and output of size 3 (classes)
+val layers = Array[Int](50, 5, 4, 3)
+    import org.apache.spark.ml.classification.MultilayerPerceptronClassifier
+    val trainer = new MultilayerPerceptronClassifier()
+    .setMaxIter(50)
+    .setLayers(layers)
+    .setBlockSize(128)
+    .setSeed (1234L)
+
+
+
+
+    
+
+    // train the model
+    val model = trainer.fit(train)
+
+    // compute accuracy on the test set
+    val result = model.transform(test)
+    //Question replace select by map
+
+    val predictionAndLabels = result.select("prediction", "label")
+    //val predictionAndLabels = result.map(r => (r.getAs[Double]("prediction"), r.getAs[Double]("label") ))
+
+    val evaluator = new MulticlassClassificationEvaluator()
+    .setMetricName("accuracy")
+
+    println(s"Test set accuracy = ${evaluator.evaluate(predictionAndLabels)}")
+
+
+    //----- Validate the perceptron
+    //      - Either implement your own validation loop  or use
+	  //        org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator
+    
+    //http://spark.apache.org/docs/latest/api/scala/index.html#org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator
+    //https://blog.dataiku.com/model-sucks-evaluating-models-validation-set-infographic
+    
+    
+    import org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator
+
+
+    //Question what is difference between f1 weightedPrecision weightedRecall accuracy
+
+    // Does not make any difference to  resualt of avgMetrics wheter calculate f1 weightedPrecision weightedRecall.
+    /*val evaluatorF1 = new MulticlassClassificationEvaluator()
+      .setMetricName("f1")
+
+    val evaluatorPrecision = new MulticlassClassificationEvaluator()
+      .setMetricName("weightedPrecision")
+
+    val evaluatorRecall = new MulticlassClassificationEvaluator()
+      .setMetricName("weightedRecall")
+
+
+    
+    println("F1: " + evaluatorF1.evaluate(predictionAndLabels))
+    println("weightedPrecision: " + evaluatorPrecision.evaluate(predictionAndLabels))
+    println("WeightedRecall: " + evaluatorRecall.evaluate(predictionAndLabels))*/
+
+
+
+
+  val paramGrid = new ParamGridBuilder().build()
+  val evaluatorCv = new MulticlassClassificationEvaluator().setMetricName("accuracy")
+  val cv = new CrossValidator().setEstimator(trainer) // our MultiLayerPerceptronClassifier //evaluatorAccuracy
+  .setEvaluator(evaluatorCv)
+  .setEstimatorParamMaps(paramGrid).setParallelism(4).setNumFolds(10);
+  val modelCv = cv.fit(train);
+  val resultCv = modelCv.transform(test) // query the result objects for accuracy
+  //Question Does avgMetrics returns the 
+  //f1 weightedPrecision weightedRecall accuracy?
+  val average = modelCv.avgMetrics average of 
+    println("average for 10-fold validation")
+    average.foreach(println)
+
+
+
+
+
+
+    // Any suggestions of improvement to the above guide are welcomed by
+    // teachers.
+    //
+    // This is an open programming exercise, you do not need to follow the above
+    // guide to complete it.
+
+
+    import org.apache.spark.mllib.evaluation.RegressionMetrics
+import org.apache.spark.mllib.linalg.Vector
+import org.apache.spark.mllib.regression.{LabeledPoint, LinearRegressionWithSGD}
+
+    // Instantiate metrics object
+val metrics = new RegressionMetrics(predictionAndLabels.rdd)
+
+
+
+/*// Squared error
+println(s"MSE = ${metrics.meanSquaredError}")
+println(s"RMSE = ${metrics.rootMeanSquaredError}")
+
+// R-squared
+println(s"R-squared = ${metrics.r2}")
+
+// Mean absolute error
+println(s"MAE = ${metrics.meanAbsoluteError}")
+
+// Explained variance
+println(s"Explained variance = ${metrics.explainedVariance}")*/
+
+
+		spark.stop
+  }
+
+}

@@ -1,0 +1,250 @@
+// Advanced Programming
+// Andrzej Wąsowski, IT University of Copenhagen
+
+// AUTHOR1: Amir Souri
+// TIME1: 10 <- how much time have you used on solving this exercise set
+// (excluding reading the book, fetching pizza, and going out for a smoke)
+//
+// AUTHOR2: Filip Dusek
+// TIME2: 11 <- how much time have you used on solving this exercise set
+// (excluding reading the book, fetching pizza, and going out for a smoke)
+//Abdullah Al Maruf
+//
+// AUTHOR3: Abdullah Al Maruf
+// TIME3: 9 <- how much time have you used on solving this exercise set
+// (excluding reading the book, fetching pizza, and going out for a smoke)
+
+
+// meant to be compiled, for example: fsc Stream.scala
+
+package adpro
+
+sealed trait Stream[+A] {
+  import Stream._
+
+  def headOption () :Option[A] = this match {
+      case Empty => None
+      case Cons(h,t) => Some(h())
+    }
+    
+  def tail :Stream[A] = this match {
+      case Empty => Empty
+      case Cons(h,t) => t()
+  }
+
+  def foldRight[B] (z : =>B) (f :(A, =>B) => B) :B = this match {
+      case Empty => z
+      case Cons (h,t) => f (h(), t().foldRight (z) (f))
+      // Note 1. f can return without forcing the tail
+      // Note 2. this is not tail recursive (stack-safe) It uses a lot of stack
+      // if f requires to go deeply into the stream. So folds sometimes may be
+      // less useful than in the strict case
+    }
+
+  // Note 1. eager; cannot be used to work with infinite streams. So foldRight
+  // is more useful with streams (somewhat opposite to strict lists)
+  def foldLeft[B] (z : =>B) (f :(A, =>B) =>B) :B = this match {
+      case Empty => z
+      case Cons (h,t) => t().foldLeft (f (h(),z)) (f)
+      // Note 2. even if f does not force z, foldLeft will continue to recurse
+    }
+
+  def exists (p : A => Boolean) :Boolean = this match {
+      case Empty => false
+      case Cons (h,t) => p(h()) || t().exists (p)
+      // Note 1. lazy; tail is never forced if satisfying element found this is
+      // because || is non-strict
+      // Note 2. this is also tail recursive (because of the special semantics
+      // of ||)
+    }
+
+  //Exercise 2
+  def toList: List[A] = 
+  foldRight(List.empty[A])((a, b) => a::b)
+
+  //Exercise 3
+  // Note: Whenever you use if statment you must take care of else (i.e what if your if statment was not true)
+  def take(n: Int): Stream[A] = this match{
+    case Empty => Empty
+    case Cons(h,t) => if (n > 0) cons(h(), t().take(n-1)) else Empty
+  }
+
+  def drop(n: Int): Stream[A] = this match{
+    case Empty => Empty
+    case Cons(h,t) => if (n>1) t().drop(n-1) else t() // Mistake n>0
+  }
+  
+  //Exercise 4
+  def takeWhile(p: A => Boolean): Stream[A] = this match{
+    case Empty => Empty
+    case Cons(h,t) => if (p(h())) cons(h(), t().takeWhile(p)) else Empty
+  }
+
+  //Exercise 5
+  def forAll(p: A => Boolean): Boolean = // this match{
+  //   case Empty => true
+  //   case Cons(h,t) => if(p(h())) t().forAll(p) else false
+  // }
+
+  //foldRight(true)((a,b) => p(a) && b)
+  foldRight(true)(p(_) && _)
+
+  //Exercise 6
+  def takeWhile2(p: A => Boolean): Stream[A] = 
+  foldRight(empty[A])((a, b) => if (p(a)) cons(a, b) else empty)
+
+  //Exercise 7
+  def headOption2 () :Option[A] =
+  foldRight[Option[A]](None) ((a,b) => Some(a))
+
+  //Exercise 8 The types of these functions are omitted as they are a part of the exercises
+  def map[B](f: A => B) : Stream[B] = 
+  foldRight[Stream[B]](empty)((h, t) => cons(f(h), t))
+
+  def filter[B](p: A => Boolean) : Stream[A] = 
+  foldRight[Stream[A]](empty)((h, t) => if (p(h)) cons(h, t) else t)
+
+  def append[B >: A](that: => Stream[B]): Stream[B] = 
+  foldRight(that)((h, t) => cons(h, t))
+
+  def flatMap[B](f: A => Stream[B]) : Stream[B] = 
+  foldRight(empty[B])((h, t) => f(h) append t )
+
+  //Exercise 09
+  //Put your answer here:
+
+//Because Stream is lazy so it will be terminated and returns current element once the p returns true.
+// i.e., it won't check if p holds for all elements of a Stream immediately.It will check step by step, 
+//meaning it checks if p  return true for the first element then terminates and return the value of the first element,
+// otherwise check the second element and so on.
+//On the other hand, it will first check whether p holds for all the elements of a list and then collects all the elements 
+//that satisfy the prediction function p. In the end, it returns the headOption of the collected elements.  
+
+  //Exercise 10
+  //Put your answer here:
+  
+  def fibs: Stream[Int] = {
+    def go(na: Int, nb: Int): Stream[Int] = {
+        cons(na + nb, go(nb, na+nb)) 
+    }
+    cons(0, cons(1, go(0, 1)))
+  }
+
+
+  // def fibs: Stream[Int] = {
+  //   def go(current: Int, next: Int): Stream[Int] =  {  
+  //      cons(current, go(current = current + next, next = current))
+  //     }
+  //     go(current = 0, next = 1)
+  //   }
+
+  //Exercise 11
+  
+  // def unfold[A, S](z: S)(f: S => Option[(A, S)]): Stream[A] = f(z) match {
+  //   case Some((head, state)) => cons(head, unfold(state)(f))
+  //   case None => empty
+  // }
+
+  def unfold[A, S](z: S)(f: S => Option[(A, S)]): Stream[A] = {
+    f(z).map((t: (A, S)) => cons(t._1, unfold(t._2)(f))).getOrElse(empty)
+   }
+   
+
+  //Exercise 12
+  def fib2 : Stream[Int] = unfold((0,1)) {   case (a,s) => Some( (a, (s, a+s)   )   )}
+
+//   def fib2  = unfold((0, 1))(pair => {
+//     val (a, b) = pair
+//     Some(a, (b, a+b))
+// })
+
+  def from2 (n: Int): Stream[Int]= 
+  unfold((n)) {  a =>  Some(a, a+1)   }
+
+  //Exercise 13
+
+  def map2[B](f: A => B): Stream[B]=   unfold(this) {
+    case Cons(h, t) => Some((f(h()), t()))
+    case _ => None
+}
+
+  def take2 (n: Int): Stream[A] =
+  unfold((this, n)) {
+    case (Cons(h, t), 1) => Some((h(), (empty, 0)))
+    case (Cons(h, t), i) if i > 1 => Some((h(), (t(), i - 1)))
+    case _ => None
+  }
+
+
+  def takeWhile3 (p: A => Boolean): Stream[A] = unfold(this) {
+    case Cons(h, t) if p(h()) => Some((h(), t()))
+    case _ => None
+  }
+
+
+  def zipWith2[B, C] (f: (A, B) => C) (s2: Stream[B]): Stream[C] =
+    unfold((this, s2)) {
+      case (Cons(h1, t1), Cons(h2, t2)) => Some(f(h1(), h2()), (t1(), t2()))
+      case _ => None
+    } 
+  
+
+  //assert(naturals.zipWith2[Int,Int] (_+_) (naturals).take(2000000000).take(20).toList == (0 to 38 by 4).toList)
+
+
+    
+
+}
+
+
+case object Empty extends Stream[Nothing]
+case class Cons[+A](h: ()=>A, t: ()=>Stream[A]) extends Stream[A]
+
+object Stream {
+
+  def empty[A]: Stream[A] = Empty
+
+  def cons[A] (hd: => A, tl: => Stream[A]) :Stream[A] = {
+    lazy val head = hd
+    lazy val tail = tl
+    Cons(() => head, () => tail)
+  }
+
+  def apply[A] (as: A*) :Stream[A] =
+    if (as.isEmpty) empty
+    else cons(as.head, apply(as.tail: _*))
+    // Note 1: ":_*" tells Scala to treat a list as multiple params
+    // Note 2: pattern matching with :: does not seem to work with Seq, so we
+    //         use a generic function API of Seq
+
+
+  //Exercise 1
+  def from(n:Int):Stream[Int]=cons(n,from(n+1))
+
+  def to(n:Int):Stream[Int]= cons(n,from(n-1))
+
+  val naturals: Stream[Int] = from(0)
+
+
+
+  def fibs: Stream[Int] = {
+      def go(current: Int, next: Int): Stream[Int] =  {  
+         cons(current, go(current = current + next, next = current))
+        }
+        go(current = 0, next = 1)
+      }
+      
+ def unfold[A, S](z: S)(f: S => Option[(A, S)]): Stream[A] = {
+    f(z).map((t: (A, S)) => cons(t._1, unfold(t._2)(f))).getOrElse(empty)
+   }
+
+  def fib2: Stream[Int] = Stream.unfold((0, 1)) {
+    case (i, j) => Some( (i, (j, i + j)) )
+  }
+
+  def from2 (n: Int): Stream[Int]= unfold((n)) {  a =>  Some(a, a+1)   }
+
+  
+
+}
+

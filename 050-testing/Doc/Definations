@@ -1,0 +1,28 @@
+invariant:
+
+An invariant is more "conceptual" than a variable. In general, it's a property of the program state that is always true. A function or method that ensures that the invariant holds is said to maintain the invariant.
+
+For instance, a binary search tree might have the invariant that for every node, the key of the node's left child is less than the node's own key. A correctly written insertion function for this tree will maintain that invariant.
+
+As you can tell, that's not the sort of thing you can store in a variable: it's more a statement about the program. By figuring out what sort of invariants your program should maintain, then reviewing your code to make sure that it actually maintains those invariants, you can avoid logical errors in your code.
+
+
+
+Verification:
+
+Verification makes sure that the product is designed to deliver all functionality to the customer.
+
+    Verification is done at the starting of the development process. It includes reviews and meetings, walk-throughs, inspection, etc. to evaluate documents, plans, code, requirements and specifications.
+    Suppose you are building a table. Here the verification is about checking all the parts of the table, whether all the four legs are of correct size or not. If one leg of table is not of the right size it will imbalance the end product. Similar behavior is also noticed in case of the software product or application. If any feature of software product or application is not up to the mark or if any defect is found then it will result into the failure of the end product. Hence, verification is very important. It takes place at the starting of the development process.
+
+ 
+
+    Software verification and validation
+    Software verification and validation
+
+    It answers the questions like: Am I building the product right?
+    Am I accessing the data right (in the right place; in the right way).
+    It is a Low level activity
+    Performed during development on key artifacts, like walkthroughs, reviews and inspections, mentor feedback, training, checklists and standards.
+    Demonstration of consistency, completeness, and correctness of the software at each stage and between each stage of the development life cycle.
+

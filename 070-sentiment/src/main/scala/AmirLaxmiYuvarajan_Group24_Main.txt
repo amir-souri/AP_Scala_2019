@@ -1,0 +1,250 @@
+// Advanced Programming. Andrzej Wasowski. IT University
+// To execute this example, run "sbt run" or "sbt test" in the root dir of the project
+// Spark needs not to be installed (sbt takes care of it)
+
+import scala.collection.mutable
+import org.apache.spark.ml.feature.Tokenizer
+import org.apache.spark.sql.Dataset
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.{DataFrame, Dataset, SparkSession}
+import org.apache.spark.ml.linalg.Vectors
+import org.apache.spark.ml.classification.MultilayerPerceptronClassifier
+import org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator
+import org.apache.spark.ml.tuning.{CrossValidator, ParamGridBuilder}
+
+
+object Main {
+
+	val GLOVE_DIMENSIONS = 50
+
+	type Embedding       = (String, List[Double])
+	type ParsedReview    = (Integer, String, Double)
+
+	//Creating new types for storing the vectors in tuple
+	type Tokenized = (Int ,String, Double)
+	type TypeJoinedWithGlove = (String , Int, Double, List[Double])
+	type TypeWords = (Int, String, Double)
+	type TypeCalcAvgVector = (Int, List[Double])
+
+	org.apache.log4j.Logger getLogger "org"  setLevel (org.apache.log4j.Level.WARN)
+	org.apache.log4j.Logger getLogger "akka" setLevel (org.apache.log4j.Level.WARN)
+	val spark =  SparkSession.builder
+		.appName ("Sentiment")
+		.master  ("local[9]")
+		.getOrCreate
+
+  import spark.implicits._
+
+	val reviewSchema = StructType(Array(
+			StructField ("reviewText", StringType, nullable=false),
+			StructField ("overall",    DoubleType, nullable=false),
+			StructField ("summary",    StringType, nullable=false)))
+
+	// Read file and merge the text abd summary into a single text column
+
+	def loadReviews (path: String): Dataset[ParsedReview] =
+		spark
+			.read
+			.schema (reviewSchema)
+			.json (path)
+			.rdd
+			.zipWithUniqueId
+			.map[(Integer,String,Double)] { case (row,id) => (id.toInt, s"${row getString 2} ${row getString 0}", row getDouble 1) }
+			.toDS
+			.withColumnRenamed ("_1", "id" )
+			.withColumnRenamed ("_2", "text")
+			.withColumnRenamed ("_3", "overall")
+			.as[ParsedReview]
+
+  // Load the GLoVe embeddings file
+
+  def loadGlove (path: String): Dataset[Embedding] =
+		spark
+			.read
+			.text (path)
+      .map  { _ getString 0 split " " }
+      .map  (r => (r.head, r.tail.toList.map (_.toDouble))) // yuck!
+			.withColumnRenamed ("_1", "word" )
+			.withColumnRenamed ("_2", "vec")
+			.as[Embedding]
+
+
+	def text2Words(words: DataFrame): Dataset[(Int, String, Double)] = {
+    //  words schema: id , word , overall
+    words.flatMap(r => r.getAs[mutable.WrappedArray[String]]("words").map
+    (word => Tuple3[Int, String, Double](r.getAs("id"), word, r.getAs("overall"))))
+      .withColumnRenamed("_1", "id")
+      .withColumnRenamed("_2", "word")
+      .withColumnRenamed("_3", "overall")
+      .as[TypeWords]
+	}
+
+	def summingTheVectors(accumulator: List[Double], list: List[List[Double]], count: Int): (Int, List[Double]) = {
+    if (list.isEmpty)
+      (count, accumulator)
+    else {
+      summingTheVectors(accumulator.zip(list.head).map { case (x, y) => x + y }, list.tail, count + 1)
+    }
+  }
+
+  	def calcVectorAverages(value: Dataset[(Int, (Int, List[Double]))]): Dataset[(Int, List[Double])] = {
+    value.map({ 
+	case (id, (count, sum_vector)) => (id, sum_vector.map(d => d / count)) })
+    .withColumnRenamed("_1", "id")
+    .withColumnRenamed("_2", "average")
+    .as[TypeCalcAvgVector]
+  	}
+
+   def convertRatingto012(value: DataFrame): Dataset[(Double, org.apache.spark.ml.linalg.Vector)] = {
+    value.select("overall", "average")
+      .map({ r => {
+        if (r.getAs[Double]("overall") < 3.0)
+          (0.0, Vectors.dense(r.getAs[mutable.WrappedArray[Double]]("average").toArray))
+        else if (r.getAs[Double]("overall") == 3.0)
+          (1.0, Vectors.dense(r.getAs[mutable.WrappedArray[Double]]("average").toArray))
+        else
+          (2.0, Vectors.dense(r.getAs[mutable.WrappedArray[Double]]("average").toArray))
+      }
+      })
+      .withColumnRenamed("_1", "label")
+      .withColumnRenamed("_2", "features")
+      .as[(Double, org.apache.spark.ml.linalg.Vector)]
+  }
+
+
+  def main(args: Array[String]) = {
+
+    val glove  = loadGlove ("/media/neutron/D/3Semester/AP/Repository/Todo/070-sentiment/data/glove.6B.50d.txt") // FIXME
+    val reviews = loadReviews ("/media/neutron/D/3Semester/AP/Repository/Todo/070-sentiment/data/Musical_Instruments_5.json") // FIXME
+
+    // replace the following with the project code
+    //glove.show
+    //reviews.show
+
+	println("Printing data types of Glove : " + glove)
+	println("Printing data types of Reviews : " + reviews)
+
+	// Tokenizer takes an input sentence and breaks them into individual terms
+	// Create a tokenizer -> Set the input column -> Set the Output column // 
+	val tokenizer = new Tokenizer()
+	.setInputCol("text")
+	.setOutputCol("words")
+
+	val transformedToken = tokenizer.transform(reviews)
+	//.as[Tokenized]
+  //println(transformedToken)
+	//transformedToken.show
+
+	val words = text2Words(transformedToken)
+	//println("Display of IDs against each words")
+	//words.show
+
+	//val splitWords =transformedToken.flatMap(column => 
+   	//	column._4.getmap(word => (column._1,column._2,column._3,word))
+
+	val joinedWithGlove = words.join(glove, "word")
+      .withColumnRenamed("_1", "word")
+      .withColumnRenamed("_2", "id")
+      .withColumnRenamed("_3", "overall")
+      .withColumnRenamed("_4", "vec")
+      .as[TypeJoinedWithGlove]
+
+	//println("Display of joined table with vector dimension values of each word")
+	//joined.show
+
+	val grouped = joinedWithGlove.select("id", "vec")
+      .groupByKey(r => r.getAs[Int]("id"))
+      .mapValues(r => r.getAs[mutable.WrappedArray[Double]]("vec").toList)
+
+	val summed = grouped.mapGroups((k, v) => {
+      val list = v.toList
+      // we fill (with values 0.0) a list of size GLOVE_DIMENSIONS because that is the number of dimensions the vectors
+      // from the glove dataset have
+      (k, summingTheVectors(List.fill(GLOVE_DIMENSIONS)(0.0), list, 0))
+    })
+
+	//println("Display grouped by ID and Summed vectors")
+	//summed.show
+
+	val averaged = calcVectorAverages(summed)
+
+  val tested_value = averaged.take(1).head._2.head
+  //println(tested_value)
+	//println("Display by ID and Avg vectors")
+	//averaged.show
+
+	// We get the overall rating of a given Review ID and its average vector
+    val joinPerceptron = transformedToken.select("id","text", "overall")
+	.as[Tokenized]
+	.join(averaged, "id")
+	
+	//println("Displaying the joining with Review table")
+	//joinPerceptron.show
+
+	val labelsAndFeatures  = convertRatingto012(joinPerceptron)
+	
+	//println("Displaying the labels and features")
+	//labelsAndFeatures.show
+
+	val splits = labelsAndFeatures.randomSplit(Array(0.8, 0.2), seed = 1234L)
+    val train = splits(0)
+    val test = splits(1)
+
+    // Layers used for our neural network:
+    val layers = Array[Int](GLOVE_DIMENSIONS, 4, 4, 3)
+
+    // creating the trainer and setting its parameters
+    val trainer = new MultilayerPerceptronClassifier()
+      .setLayers(layers)
+      .setBlockSize(128)
+      .setSeed(1234L)
+      .setMaxIter(50)
+
+    // train the model
+    val model = trainer.fit(train)
+
+    // compute accuracy on the test set
+    val result = model.transform(test)
+
+    val predictionAndLabels = result.select("prediction", "label")
+
+    val evaluatorAccuracy = new MulticlassClassificationEvaluator()
+     .setMetricName("accuracy")
+
+    val evaluatorF1 = new MulticlassClassificationEvaluator()
+      .setMetricName("f1")
+
+    val evaluatorPrecision = new MulticlassClassificationEvaluator()
+      .setMetricName("weightedPrecision")
+
+    val evaluatorRecall = new MulticlassClassificationEvaluator()
+      .setMetricName("weightedRecall")
+
+
+    println("Accuracy: " + evaluatorAccuracy.evaluate(predictionAndLabels))
+    println("F1: " + evaluatorF1.evaluate(predictionAndLabels))
+    println("weightedPrecision: " + evaluatorPrecision.evaluate(predictionAndLabels))
+    println("WeightedRecall: " + evaluatorRecall.evaluate(predictionAndLabels))
+
+    val paramGrid = new ParamGridBuilder().build()
+
+    val crossval = new CrossValidator()
+    crossval.setEstimator(trainer)
+    crossval.setEvaluator(evaluatorAccuracy)
+    //crossval.setEvaluator(evaluatorF1)
+    //crossval.setEvaluator(evaluatorPrecision)
+    //crossval.setEvaluator(evaluatorRecall)
+    crossval.setEstimatorParamMaps(paramGrid)
+    crossval.setNumFolds(10)
+    
+
+    val modelCV = crossval.fit(labelsAndFeatures)
+    val average = modelCV.avgMetrics
+    println("average for 10-fold validation")
+    average.foreach(println)
+		spark.stop
+  }
+
+}

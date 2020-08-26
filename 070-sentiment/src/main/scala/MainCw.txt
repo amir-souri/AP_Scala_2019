@@ -1,0 +1,423 @@
+/*1. What data sets have you managed to run (including size)?
+2. What accuracy have you obtained? With how many iterations? And with what layer configuration?
+Show the variance of accuracy observed in cross validation.
+
+3. What degree of parallelization was obtained? (for instance contrast the wall clock time with
+the CPU time). Note we are not asking you to optimize parallelization, just to report what you
+obtained.
+4. What extensions (if any) you have implemented? Have you tried another classifier? Another
+network configuration? Running on a highly parallel cluster of machines, etc. ...*/
+
+import org.apache.spark.ml.feature.Tokenizer
+import org.apache.spark.sql.Dataset
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.types._
+import org.apache.spark.sql.{DataFrame, Row}
+import org.apache.spark.rdd._
+import scala.collection.mutable.WrappedArray
+import org.apache.spark.ml.linalg.{Vector, Vectors}
+import org.apache.spark.ml.classification.MultilayerPerceptronClassifier
+import org.apache.spark.ml.tuning.{CrossValidator, ParamGridBuilder}
+import org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator
+
+
+object Main {
+
+  type Embedding = (String, List[Double])
+  type ParsedReview = (Integer, String, Double)
+
+  org.apache.log4j.Logger getLogger "org" setLevel (org.apache.log4j.Level.WARN)
+  org.apache.log4j.Logger getLogger "akka" setLevel (org.apache.log4j.Level.WARN)
+  val spark = SparkSession.builder
+    .appName("Sentiment")
+    .master("local[5]")
+    .getOrCreate
+
+  spark.conf.set("spark.executor.memory", "4g")
+
+  import spark.implicits._
+
+  val reviewSchema = StructType(
+    Array(
+      StructField("reviewText", StringType, nullable = false),
+      StructField("overall", DoubleType, nullable = false),
+      StructField("summary", StringType, nullable = false)
+    )
+  )
+
+  def loadReviews(path: String): Dataset[ParsedReview] =
+    spark.read
+      .schema(reviewSchema)
+      .json(path)
+      .rdd
+      .zipWithUniqueId
+      .map[(Integer, String, Double)] {
+        case (row, id) =>
+          (id.toInt, s"${row getString 2} ${row getString 0}", row getDouble 1)
+      }
+      .toDS
+      .withColumnRenamed("_1", "id")
+      .withColumnRenamed("_2", "text")
+      .withColumnRenamed("_3", "overall")
+      .as[ParsedReview]
+
+  def loadGlove(path: String): Dataset[Embedding] =
+    spark.read
+      .text(path)
+      .map { _ getString 0 split " " }
+      .map(r => (r.head, r.tail.toList.map(_.toDouble)))
+      .withColumnRenamed("_1", "word")
+      .withColumnRenamed("_2", "vec")
+      .as[Embedding]
+
+  def main(args: Array[String]) = {
+
+    val DATA_PATH =
+      "/media/neutron/D/3Semester/AP/Repository/Todo/070-sentiment/data"
+
+    val glove: Dataset[Embedding] = loadGlove(s"${DATA_PATH}/glove.6B.50d.txt")
+    val reviews: Dataset[ParsedReview] = loadReviews(
+      s"${DATA_PATH}/Musical_Instruments_5.json"
+    )
+
+    val tokenizer = new Tokenizer().setInputCol("text").setOutputCol("words")
+    val tokenized: DataFrame = tokenizer.transform(reviews)
+
+
+    def reviewsToEmbeddings(
+        transformTokenized: DataFrame
+    ): Dataset[(Integer, String, Double)] = {
+      transformTokenized
+        .flatMap(
+          a =>
+            a.getAs[WrappedArray[String]]("words")
+              .map(
+                word =>
+                  Tuple3[Integer, String, Double](
+                    a.getAs("id"),
+                    word,
+                    a.getAs("overall")
+                  )
+              )
+        )
+        .withColumnRenamed("_1", "id")
+        .withColumnRenamed("_2", "word")
+        .withColumnRenamed("_3", "overall")
+        .as[(Integer, String, Double)]
+    }
+
+    val singleWords = reviewsToEmbeddings(tokenized)
+    
+    val joinedGlove: Dataset[(String, Integer, Double, Array[Double])] =
+      singleWords
+        .join(glove, "word")
+        .withColumnRenamed("_1", "word")
+        .withColumnRenamed("_2", "id")
+        .withColumnRenamed("_3", "overall")
+        .withColumnRenamed("_4", "vec")
+        .as[(String, Integer, Double, Array[Double])]
+
+    val dropColumnWord: DataFrame =
+      joinedGlove.toDF
+        .map(
+          row =>
+            Tuple3[Integer, Double, WrappedArray[Double]](
+              row.getAs("id"),
+              row.getAs("overall"),
+              row.getAs("vec")
+            )
+        )
+        .withColumnRenamed("_1", "id")
+        .withColumnRenamed("_2", "overall")
+        .withColumnRenamed("_3", "vec")
+
+    val addColumn1s: DataFrame = dropColumnWord
+      .map(
+        row =>
+          Tuple4[Integer, Double, WrappedArray[Double], Integer](
+            row.getAs("id"),
+            row.getAs("overall"),
+            row.getAs("vec"),
+            1
+          )
+      )
+      .withColumnRenamed("_1", "id")
+      .withColumnRenamed("_2", "overall")
+      .withColumnRenamed("_3", "vec")
+      .withColumnRenamed("_4", "1s")
+
+    def sumTheVectors(
+        first: WrappedArray[Double],
+        secound: WrappedArray[Double]
+    ): WrappedArray[Double] = {
+      first.zip(secound).map { case (x, y) => x + y }
+    }
+
+    def eachRowDivideVectorByCount(
+        vec: WrappedArray[Double],
+        count: Integer
+    ): WrappedArray[Double] = {
+      vec.map(_ / count)
+    }
+
+    val reduceWithKey
+        : Dataset[(Integer, Double, Array[Double])] = addColumn1s.rdd
+      .map(
+        row =>
+          (
+            row.getAs("id"): Integer,
+            (
+              row.getAs("1s"): Integer,
+              row.getAs[WrappedArray[Double]]("vec"),
+              row.getAs[Double]("overall")
+            )
+          )
+      )
+      .reduceByKey((x, y) => (x._1 + y._1, sumTheVectors(x._2, y._2), x._3))
+      .map(
+        row =>
+          (row._1, row._2._3, eachRowDivideVectorByCount(row._2._2, row._2._1))
+      )
+      .toDS
+      .withColumnRenamed("_1", "id")
+      .withColumnRenamed("_2", "overall")
+      .withColumnRenamed("_3", "vec")
+      .as[(Integer, Double, Array[Double])]
+
+    val properDtaForMLPC: Dataset[(Integer, Integer, Vector)] =
+      reduceWithKey
+        .map(
+          row =>
+            (
+              row._1,
+              if (row._2 < 3) 0 else if (row._2 == 5) 2 else 1,
+              Vectors.dense(row._3)
+            )
+        )
+        .withColumnRenamed("_1", "id")
+        .withColumnRenamed("_2", "label")
+        .withColumnRenamed("_3", "features")
+        .as[(Integer, Integer, Vector)]
+
+    val splits = properDtaForMLPC.randomSplit(Array(0.7, 0.3), seed = 1234L)
+    val train = splits(0)
+    val test = splits(1)
+
+    val layers = Array[Int](50, 4, 4, 3)
+    val trainer = new MultilayerPerceptronClassifier()
+      .setMaxIter(10) //100
+      .setLayers(layers)
+      .setBlockSize(128)
+      .setSeed(1234L)
+
+    val model = trainer.fit(train)
+
+    val result = model.transform(test)
+    val predictionAndLabels = result.select("prediction", "label")
+
+    val evaluator = new MulticlassClassificationEvaluator()
+      .setMetricName("accuracy")
+
+    println(s"Holdout set accuracy = ${evaluator.evaluate(predictionAndLabels)}")
+    //////////////////////////////////////////////////////////////
+
+  //   // for measureWallClockTime do need to import anything
+  //   def measureWallClockTime[T](f: => T): Double = {
+  //     val start = System.nanoTime
+  //     val end = System.nanoTime
+  //     val t = (end - start) / 1000000000.0
+  //     t
+  //   }
+    
+
+  //   import java.lang.management.{ ManagementFactory, ThreadMXBean }
+
+  // val bean: ThreadMXBean = ManagementFactory.getThreadMXBean()
+  // def getCpuTime = if (bean.isCurrentThreadCpuTimeSupported()) bean.getCurrentThreadCpuTime() else 0
+  // /**
+  //  * Runs the argument function f and measures the user+system time spent in it in seconds.
+  //  * Accuracy depends on the system, preferably not used for runs taking less than 0.1 seconds.
+  //  * Returns a pair consisting of
+  //  * - the return value of the function call and
+  //  * - the time spent in executing the function.
+  //  */
+  // def measureCpuTime[T](f: => T): Double = {
+  //   val start = getCpuTime
+  //   val end = getCpuTime
+  //   val t = (end - start) / 1000000000.0
+  //   t
+  // }
+
+    // def HoldoutAccuracy[T](eva: org.apache.spark.ml.evaluation.MulticlassClassificationEvaluator ) : Double ={
+    //   eva.evaluate(predictionAndLabels)
+    // }
+
+    // val a = measureWallClockTime(HoldoutAccuracy(evaluator)) 
+
+    // println("measureWallClockTime Holdout set accuracy")
+    // println(a)
+
+    // val b = measureCpuTime(HoldoutAccuracy(evaluator)) 
+
+    // println("measureCpuTime Holdout set accuracy")
+    // println(b)
+
+///////////////////////////////////////////////////
+
+//val select: DataFrame = tokenized.select("words")
+  //val selectWithMap = tokenized.map(a => a.getAs[String](1))//.withColumnRenamed ("_0", "test" ).as[String]
+  //selectWithMap.show
+
+    // val evaluatorF1 = new MulticlassClassificationEvaluator()
+    //   .setMetricName("f1")
+
+    // val evaluatorPrecision = new MulticlassClassificationEvaluator()
+    //   .setMetricName("weightedPrecision")
+
+    // val evaluatorRecall = new MulticlassClassificationEvaluator()
+    //   .setMetricName("weightedRecall")
+
+
+    
+    // println("F1: " + evaluatorF1.evaluate(predictionAndLabels))
+    // println("weightedPrecision: " + evaluatorPrecision.evaluate(predictionAndLabels))
+    // println("WeightedRecall: " + evaluatorRecall.evaluate(predictionAndLabels))
+
+
+// val paramGrid = new ParamGridBuilder().build()
+// val evaluatorCv = new MulticlassClassificationEvaluator().setMetricName("accuracy")
+// val cv = new CrossValidator().setEstimator(trainer) // our MultiLayerPerceptronClassifier //evaluatorAccuracy
+// .setEvaluator(evaluatorCv)
+// .setEstimatorParamMaps(paramGrid).setParallelism(4) // Evaluate up to 4 parameter settings in parallel
+//.setNumFolds(10); // Use 10+ in practice
+// val modelCv = cv.fit(train);
+// val resultCv = modelCv.transform(test) // query the result objects for accuracy*/
+// val average = modelCv.avgMetrics 
+
+//     println("Average for 10-fold validation")
+//     average.foreach(println)
+//     //println(average)
+// def averageCv[T](modelCv: org.apache.spark.ml.tuning.CrossValidatorModel ) : Array[Double] ={
+//   modelCv.avgMetrics
+// }
+
+//////////////////////////fil////////////////////////////////////////
+
+val accuracies = (0 to 9).map(foldnr => {
+  val train = properDtaForMLPC.rdd.zipWithIndex.filter(
+      (t) => {t._2 % 10 != foldnr}
+  ).map(t => t._1).toDS.withColumnRenamed("_1", "id")
+  .withColumnRenamed("_2", "label")
+  .withColumnRenamed("_3", "features")
+  .as[(Integer, Integer, Vector)]
+
+  val test = properDtaForMLPC.rdd.zipWithIndex.filter(
+      (t) => {t._2 % 10 == foldnr}
+  ).map(t => t._1).toDS.withColumnRenamed("_1", "id")
+  .withColumnRenamed("_2", "label")
+  .withColumnRenamed("_3", "features")
+  .as[(Integer, Integer, Vector)]  // (Integer, Integer, Vector)
+
+  val model = trainer.fit(train)
+
+  // compute accuracy on the test set
+  val result = model.transform(test)
+  val predictionAndLabels = result.select("prediction", "label")
+  val evaluator = new MulticlassClassificationEvaluator()
+    .setMetricName("accuracy")
+
+  evaluator.evaluate(predictionAndLabels)
+})
+println("Accuracies across folds")
+println(accuracies)
+
+
+
+//////////////////////////////////////////////////////////////
+
+  /**
+   * Runs the argument function f and measures the wall clock time spent in it in seconds.
+   * Returns a pair consisting of
+   * - the return value of the function call and
+   * - the time spent in executing the function.
+   */
+  // def measureWallClockTime[T](f: => T): Double = {
+  //   val start = System.nanoTime
+  //   val end = System.nanoTime
+  //   val t = (end - start) / 1000000000.0
+  //   t
+  // }
+  
+
+  
+  
+
+  import java.lang.management.{ ManagementFactory, ThreadMXBean }
+
+val bean: ThreadMXBean = ManagementFactory.getThreadMXBean()
+def getCpuTime = if (bean.isCurrentThreadCpuTimeSupported()) bean.getCurrentThreadCpuTime() else 0
+/**
+ * Runs the argument function f and measures the user+system time spent in it in seconds.
+ * Accuracy depends on the system, preferably not used for runs taking less than 0.1 seconds.
+ * Returns a pair consisting of
+ * - the return value of the function call and
+ * - the time spent in executing the function.
+ */
+def measureCpuTime[T](f: => T): Double = {
+  val start = getCpuTime
+  val end = getCpuTime
+  val t = (end - start) / 1000000000.0
+  t
+}
+
+// for measureWallClockTime do need to import anything
+def measureWallClockTime[T](f: => T): Double = {
+  val start = System.nanoTime
+  val end = System.nanoTime
+  val t = (end - start) / 1000000000.0
+  t
+}
+
+  //println(s"measureWallClockTime for 10-fold validation = ${measureWallClockTime(averageCv(modelCv))}")
+
+  //val r = measureWallClockTime(averageCv(modelCv))  
+  //println(" measureWallClockTime for 10-fold validation" + r)
+  //println(r)
+
+
+  //println(s"measureCpuTime for 10-fold validation = ${measureCpuTime(averageCv(modelCv))}")
+
+  //val r2 = measureCpuTime(averageCv(modelCv))
+  
+  //println(" measureCpuTime for 10-fold validation" + r2)
+  //println(r2)
+
+/////////////////////////////////////////////////
+
+// import java.lang.management.{ ManagementFactory, ThreadMXBean }
+
+//   val bean: ThreadMXBean = ManagementFactory.getThreadMXBean()
+//   def getCpuTime = if (bean.isCurrentThreadCpuTimeSupported()) bean.getCurrentThreadCpuTime() else 0
+//   /**
+//    * Runs the argument function f and measures the user+system time spent in it in seconds.
+//    * Accuracy depends on the system, preferably not used for runs taking less than 0.1 seconds.
+//    * Returns a pair consisting of
+//    * - the return value of the function call and
+//    * - the time spent in executing the function.
+//    */
+//   def measureCpuTime[T](f: => T): Double = {
+//     val start = getCpuTime
+//     val end = getCpuTime
+//     val t = (end - start) / 1000000000.0
+//     t
+//   }
+
+  // val r2 = measureCpuTime(averageCv(modelCv))
+
+  // println(" r2 measureCpuTime Average for 10-fold validation")
+  // println(r2)
+
+
+    spark.stop
+  }
+}

@@ -1,0 +1,218 @@
+// Advanced Programming, A. Wasowski, IT University of Copenhagen
+//
+// Group number: 17
+//
+// AUTHOR1: Amir Souri
+// TIME1: 8 <- how much time have you used on solving this exercise set
+// (excluding reading the book, fetching pizza, and going out for a smoke)
+//
+// AUTHOR2: Filip Dusek
+// TIME2: 10 <- how much time have you used on solving this exercise set
+// (excluding reading the book, fetching pizza, and going out for a smoke)
+//
+// You should work with the file by following the associated exercise sheet
+// (available in PDF from the course website).
+//
+// This file is compiled with 'sbt compile' and tested with 'sbt test'.
+//
+// The file shall always compile and run after you are done with each exercise
+// (if you do them in order).  Please compile and test frequently. Of course,
+// some tests will be failing until you finish. Only hand in a solution that
+// compiles and where tests pass for all parts that you finished.    The tests
+// will fail for unfnished parts.  Comment such out.
+
+
+////////////////////////////////////Questions/////////////////////////////////////////////////////////////
+
+// 1. We implemented exercises 1 and 9 in two different way. It would be great if you give us some feedback about them.
+
+// 2. Why we used override annotation here?!
+// It seems we do not need to use override annotation since compare in not a method in java.awt.Point.
+// But if we would define getY we should use override anotation since getY is a method in java.awt.Point.
+// Is it correct?
+
+// 3. Moreover, compare has to return an Integer so that if p > q it should be a positive number let say 1.
+// If p < q it should be a negative number let say -1 and in case of equality it should be 0.
+// But if I change the return value of the equality if statement in the body of the compare method that is:
+// if (this.x == that.x && this.y == that.y) 0  
+// to a positive value e.g 12 or even an negative value e.g -3 then add (p == q) shouldBe false 
+// in the ExerciseSpec.scala after the line (p < q) shouldBe true
+// and run the test it would passe all the tests which is not correct since I changed the 0 to -3 or even 12.
+//Am I missing something?
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+package adpro
+
+// Exercise  1
+
+/* We create OrderedPoint as a trait instead of a class, so we can mix it into
+ * Points (this allows to use java.awt.Point constructors without
+ * reimplementing them). As constructors are not inherited, We would have to
+ * reimplement them in the subclass, if classes not traits are used.  This is
+ * not a problem if I mix in a trait construction time. */
+
+trait OrderedPoint extends scala.math.Ordered[java.awt.Point] {
+
+  this: java.awt.Point =>
+
+  override def compare (that: java.awt.Point): Int =  {
+    this.x + this.y - that.x - that.y 
+    //if (this.x == that.x && this.y == that.y) 0
+    //else if (this.x == that.x && this.y < that.y) -1
+    //else if (this.x == that.x && this.y > that.y) 1
+    //else if (this.x > that.x) 1
+    //else -1
+  }
+
+}
+
+// Try the following (and similar) tests in the repl (sbt console):
+// val p = new java.awt.Point(0,1) with OrderedPoint
+// val q = new java.awt.Point(0,2) with OrderedPoint
+// assert(p < q)
+
+// Chapter 3
+
+
+sealed trait Tree[+A]
+case class Leaf[A] (value: A) extends Tree[A]
+case class Branch[A] (left: Tree[A], right: Tree[A]) extends Tree[A]
+
+object Tree {
+  // Exercise 2 (3.25)
+  def size[A] (t :Tree[A]): Int = t match{
+    case Leaf(_) =>   1
+    case Branch(l, r) => 1 + size(l) + size(r)
+  }
+
+  // Exercise 3 (3.26)
+
+  def maximum (t: Tree[Int]): Int = t match{
+    case Leaf(v) => v
+    case Branch(l, r) => maximum(l) max maximum(r)
+  }
+
+  // Exercise 4 (3.28)
+
+  def map[A,B] (t: Tree[A]) (f: A => B): Tree[B] = t match{
+    case Leaf(v) => Leaf(f(v))
+    case Branch(l, r) => Branch(map(l)(f), map(r)(f))
+  }
+
+  // Exercise 5 (3.29)
+
+  def fold[A,B] (t: Tree[A]) (f: (B,B) => B) (g: A => B): B = t match{
+    case Leaf(v) => g(v)
+    case Branch(l, r) => f(fold(l)(f)(g), fold(r)(f)(g))
+  }
+
+  def size1[A] (t: Tree[A]): Int = 
+  fold[A, Int] (t) ((l, r) => 1 + l + r) (_ => 1)
+
+  def maximum1[A] (t: Tree[Int]): Int = 
+  fold[Int, Int] (t) (_ max _) (v => v)
+
+  def map1[A,B] (t: Tree[A]) (f: A=>B): Tree[B] = 
+  fold[A, Tree[B]] (t) (Branch(_, _)) (v => Leaf(f(v)))
+
+}
+
+sealed trait Option[+A] {
+
+  // Exercise 6 (4.1)
+
+  def map[B] (f: A=>B): Option[B] = this match{
+    case None => None
+    case Some(v) => Some(f(v))
+  }
+
+  // You may Ignore the arrow in default's type below for the time being.
+  // (it should work (almost) as if it was not there)
+  // It prevents the argument "default" from being evaluated until it is needed.
+  // So it is not evaluated in case of Some (the term is 'call-by-name' and we
+  // should talk about this soon).
+
+  def getOrElse[B >: A] (default: => B): B = this match{
+    case None => default
+    case Some(v) => v
+  }
+
+  def flatMap[B] (f: A=>Option[B]): Option[B] = this match{
+    case None => None
+    case Some(v) => f(v)
+  }
+
+  def filter (p: A => Boolean): Option[A] = this match{
+    case None => None
+    case Some(v) => if (p(v)) Some(v) else None
+  }
+
+}
+
+case class Some[+A] (get: A) extends Option[A]
+case object None extends Option[Nothing]
+
+object ExercisesOption {
+
+  // Remember that mean is implemented in Chapter 4 of the text book
+
+  def mean(xs: Seq[Double]): Option[Double] =
+    if (xs.isEmpty) None
+    else Some(xs.sum / xs.length)
+
+  // Exercise 7 (4.2)
+
+  def variance (xs: Seq[Double]): Option[Double] =
+  //mean(xs).flatMap(m => mean(xs.map(x => math.pow(x - m, 2)))) 
+  for{
+    a <- mean(xs)
+    b <- mean(xs)
+  }yield (math.pow(b - a, 2))
+
+
+  // Exercise 8 (4.3)
+
+  def map2[A,B,C] (ao: Option[A], bo: Option[B]) (f: (A,B) => C): Option[C] = 
+  ao.flatMap(av => bo.map(bv => f(av,bv)) )
+
+
+  // Exercise 9 (4.4)
+
+/*Write a function sequence that combines a list of Option s into one Option contain-
+ing a list of all the Some values in the original list:
+def sequence[A] (aos: List[Option[A]]): Option[List[A]]
+If the original list contains None even once, the result of the function should be None ; otherwise the
+result should be Some with a list of all the values. Do not use pattern matching, and recall that you
+have foldRight available on lists. A solution fits a (longish) single line.
+NB1. This function captures a very realistic situation, where you have a bunch of results from
+computations that may fail, and the entire list has no value to you, if at least one of these has failed.
+So sequence handles ’exceptions’ in bulk in functional style. This function sequences computations
+in the Option monad. We shall see more interesting instances of sequencing later on, and eventually
+a formal definition of a monad in the end of the course.
+NB2. This is an example, where it seems inappropriate to define the function as a method in the
+object-oriented style. The function sequence likely should not be a method on a List , as this would
+tangle List to Option , which appears not very natural. Sequencing partial computations belongs
+better with Option , which is concerned with partial computations. However, sequence cannot be a
+method on Option as its argument is List ! Thus we put it in companion object of Option.*/
+
+///scala> List(1,2,3).init
+///res5: List[Int] = List(1, 2)
+
+  def sequence[A] (aos: List[Option[A]]): Option[List[A]] =
+  //aos.foldRight[Option[List[A]]] (Some(Nil))((oa, ob) => map2(oa, ob)(_ :: _))
+{
+    if (aos.length == 0) 
+        Some(Nil) 
+    else 
+        aos.init.foldRight(aos.last.map(a => List(a)))((a, b) => b.flatMap(bn => a.flatMap(an => Some(an :: bn))))
+  }
+
+
+  // Exercise 10 (4.5)
+  
+  def traverse[A,B] (as: List[A]) (f :A => Option[B]): Option[List[B]] = 
+  as.foldRight[Option[List[B]]](Some(Nil))((x, y) => map2(f(x), y)(_ :: _))
+	//sequence(as.map(f))
+  val n  = 8
+}
